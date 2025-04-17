@@ -15,7 +15,9 @@ from typing import Tuple
 import numpy as np
 import qutip as qt
 from typing import Callable, Union
+from joblib import Parallel, delayed
 
+import functools
 import logging
 import json
 import os
@@ -360,6 +362,7 @@ class FidelityTracker:
         except Exception as e:
             logger.error(f"Failed to save fidelity history: {e}")
 
+    @functools.lru_cache(maxsize=None)  # Memoization to cache fidelity computations
     def compute_fidelity(self, A: Union[Qobj, np.ndarray], B: Union[Qobj, np.ndarray]) -> float:
         """
         Compute the fidelity between two quantum objects A and B.
@@ -453,6 +456,23 @@ class FidelityTracker:
             float: The process fidelity value.
         """
         return process_fidelity(A, B)
+
+    def compute_multiple_fidelities(self, states1: List[Qobj], states2: List[Qobj]) -> List[float]:
+        """
+        Compute multiple fidelities in parallel.
+        
+        Args:
+            states1 (List[Qobj]): List of target quantum objects.
+            states2 (List[Qobj]): List of achieved quantum objects.
+        
+        Returns:
+            List[float]: List of fidelity values for each pair.
+        """
+        # Use joblib to parallelize fidelity computations
+        results = Parallel(n_jobs=-1)(
+            delayed(self.compute_fidelity)(s1, s2) for s1, s2 in zip(states1, states2)
+        )
+        return results
 
 # --- Validation --- 
 
