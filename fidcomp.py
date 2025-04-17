@@ -306,6 +306,7 @@ class FidelityTracker:
             'state': self.compute_state_fidelity,
             'unitary': self.compute_unitary_fidelity,
             'super': self.compute_superoperator_fidelity,
+            'process': self.compute_process_fidelity,  # Added process fidelity
             # Add more fidelity types as needed
         }
 
@@ -440,6 +441,19 @@ class FidelityTracker:
         """
         return np.real(np.trace(A.dag() * B)) ** 2
 
+    def compute_process_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the process fidelity between two quantum processes.
+        
+        Args:
+            A (Qobj): The target quantum process (e.g., a process matrix).
+            B (Qobj): The achieved quantum process.
+        
+        Returns:
+            float: The process fidelity value.
+        """
+        return process_fidelity(A, B)
+
 # --- Validation --- 
 
 def validate_qobj_pair(A: Qobj, B: Qobj, fidtype: str):
@@ -461,6 +475,9 @@ def validate_qobj_pair(A: Qobj, B: Qobj, fidtype: str):
             raise ValueError(f"For {fidtype} fidelity, the Qobjs must be valid unitary or Hermitian operators.")
     elif fidtype == 'super':
         # Add any necessary checks for superoperators
+        pass
+    elif fidtype == 'process':
+        # Add any necessary checks for process fidelity (e.g., validity of process matrices)
         pass
     else:
         raise ValueError(f"Unsupported fidelity type: {fidtype}")
