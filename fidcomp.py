@@ -287,13 +287,6 @@ def trace_norm_numba(A_real: np.ndarray, A_imag: np.ndarray) -> float:
 
 # --- Fidelity Tracker ---
 logger = logging.getLogger(__name__)
-from typing import Union, List, Tuple, Callable
-import json
-import logging
-import numpy as np
-from qutip import Qobj
-
-logger = logging.getLogger(__name__)
 
 class FidelityTracker:
     def __init__(self, save_path: Union[str, None] = None, fidtype: str = 'state', fidelity_function: Callable = None):
@@ -366,7 +359,7 @@ class FidelityTracker:
         except Exception as e:
             logger.error(f"Failed to save fidelity history: {e}")
 
-    def compute_fidelity(self, A: Qobj, B: Qobj) -> float:
+    def compute_fidelity(self, A: Union[Qobj, np.ndarray], B: Union[Qobj, np.ndarray]) -> float:
         """
         Compute the fidelity between two quantum objects A and B.
         
@@ -377,6 +370,13 @@ class FidelityTracker:
         Returns:
             float: The fidelity value.
         """
+        # Ensure A and B are Qobj
+        A = self.ensure_qobj(A)
+        B = self.ensure_qobj(B)
+
+        # Validate the Qobj pair
+        validate_qobj_pair(A, B, self.fidtype)
+
         if self.fidelity_function:
             # If the user has provided a custom fidelity function, use it
             return self.fidelity_function(A, B)
@@ -385,6 +385,21 @@ class FidelityTracker:
             return self.fidelity_methods[self.fidtype](A, B)
         else:
             raise ValueError(f"Unknown fidelity type: {self.fidtype}")
+
+    def ensure_qobj(self, obj: Union[Qobj, np.ndarray]) -> Qobj:
+        """
+        Ensure the object is a Qobj (quantum object).
+        
+        Args:
+            obj (Union[Qobj, np.ndarray]): The object to be converted.
+        
+        Returns:
+            Qobj: The object wrapped in a Qobj if it is not already.
+        """
+        if isinstance(obj, Qobj):
+            return obj
+        else:
+            return Qobj(obj)
 
     def compute_state_fidelity(self, A: Qobj, B: Qobj) -> float:
         """
