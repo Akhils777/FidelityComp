@@ -287,19 +287,23 @@ def trace_norm_numba(A_real: np.ndarray, A_imag: np.ndarray) -> float:
 
 # --- Fidelity Tracker ---
 logger = logging.getLogger(__name__)
+from typing import Union, List, Tuple, Callable
+import json
+import logging
+import numpy as np
+from qutip import Qobj
+
+logger = logging.getLogger(__name__)
 
 class FidelityTracker:
-    def __init__(self, save_path: Union[str, None] = None, fidtype: str = 'state', fidelity_function: callable = None):
+    def __init__(self, save_path: Union[str, None] = None, fidtype: str = 'state', fidelity_function: Callable = None):
         """
         Initializes the FidelityTracker class with an optional fidtype and custom fidelity function.
         
         Args:
             save_path (Union[str, None]): Path to save the fidelity history. If None, no saving occurs.
             fidtype (str): Type of fidelity to compute (default is 'state').
-            fidelity_function (callable): A custom function to compute fidelity (optional).
-        
-        Example:
-            >>> tracker = FidelityTracker(save_path="fidelity.json", fidtype="state")
+            fidelity_function (Callable): A custom function to compute fidelity (optional).
         """
         self.history = []
         self.save_path = save_path
@@ -319,9 +323,6 @@ class FidelityTracker:
         Args:
             step (int): The current step in the optimization.
             fidelity_value (float): The fidelity value at this step.
-        
-        Example:
-            >>> tracker.record(1, 0.85)
         """
         self.history.append((step, fidelity_value))
         logger.info(f"Step {step}: Fidelity = {fidelity_value:.6f}")
@@ -334,19 +335,12 @@ class FidelityTracker:
         
         Returns:
             List[Tuple[int, float]]: A list of tuples containing (step, fidelity_value).
-        
-        Example:
-            >>> tracker.get_history()
-            [(1, 0.85), (2, 0.9)]
         """
         return self.history
 
     def plot(self):
         """
         Plots the fidelity history using matplotlib.
-        
-        Example:
-            >>> tracker.plot()
         """
         try:
             import matplotlib.pyplot as plt
@@ -363,9 +357,6 @@ class FidelityTracker:
     def save_to_file(self):
         """
         Saves the fidelity history to the specified file path.
-        
-        Example:
-            >>> tracker.save_to_file()
         """
         if not self.save_path:
             return
@@ -434,26 +425,27 @@ class FidelityTracker:
         """
         return np.real(np.trace(A.dag() * B)) ** 2
 
-# --- Validation ---
+# --- Validation --- 
 
-def validate_qobj_pair(A: Qobj, B: Qobj, kind: str):
+def validate_qobj_pair(A: Qobj, B: Qobj, fidtype: str):
     """
     Validates that the target and achieved Qobj are compatible for fidelity computation.
     
     Args:
         A (Qobj): The target quantum object.
         B (Qobj): The achieved quantum object.
-        kind (str): The type of fidelity ('state', 'unitary', 'super', etc.).
+        fidtype (str): The type of fidelity ('state', 'unitary', 'super', etc.).
     
     Raises:
         ValueError: If the Qobj pair is incompatible for the specified fidelity type.
     """
-    if kind in ['state', 'unitary', 'average']:
+    if fidtype == 'state' or fidtype == 'unitary':
         if A.shape != B.shape:
-            raise ValueError("Target and achieved Qobj must have the same shape.")
-        if not ((A.isunitary and B.isunitary) or (A.isherm and B.isherm) or A.isket and B.isket):
-            raise ValueError("For state/unitary fidelities, the Qobjs must be valid unitary or Hermitian operators.")
-    elif kind in ['super', 'kraus']:
-        pass  # Add any necessary checks for superoperators/kraus operators
+            raise ValueError(f"Target and achieved Qobj must have the same shape for {fidtype} fidelity.")
+        if not ((A.isunitary and B.isunitary) or (A.isherm and B.isherm) or (A.isket and B.isket)):
+            raise ValueError(f"For {fidtype} fidelity, the Qobjs must be valid unitary or Hermitian operators.")
+    elif fidtype == 'super':
+        # Add any necessary checks for superoperators
+        pass
     else:
-        raise ValueError(f"Unsupported fidelity kind: {kind}")
+        raise ValueError(f"Unsupported fidelity type: {fidtype}")
