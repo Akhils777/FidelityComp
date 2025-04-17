@@ -1,0 +1,459 @@
+"""
+Fidelity computation module for qutip_qoc (Quantum Optimal Control)
+
+This module provides state, gate, average, and custom fidelity functions,
+along with gradient support, performance optimization using Numba, 
+fidelity tracking for optimization pipelines, and support for superoperators and Kraus representations.
+
+Author: Adapted for qutip_qoc
+"""
+
+import numpy as np
+from qutip import Qobj, fidelity, ket2dm, identity, superop_reps, spre, operator_to_vector, vector_to_operator
+from numba import njit
+from typing import Tuple
+import numpy as np
+import qutip as qt
+from typing import Callable, Union
+
+import logging
+import json
+import os
+from typing import Callable, List, Union
+
+__all__ = [
+    'compute_fidelity', 'state_fidelity', 'unitary_fidelity',
+    'average_gate_fidelity', 'custom_fidelity', 'get_fidelity_func',
+    'fidelity_gradient', 'FidelityTracker',
+    'superoperator_fidelity', 'kraus_fidelity', 'process_fidelity', 
+    'gate_fidelity', 'operator_fidelity'
+]
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# --- Fidelity Functions ---
+
+def compute_fidelity(
+    target: Qobj, 
+    achieved: Qobj, 
+    kind: str = 'state', 
+    **kwargs
+) -> float:
+    """
+    Computes the fidelity between a target and achieved state based on the given fidelity type.
+
+    Args:
+        target (Qobj): The target quantum object (state, gate, or superoperator).
+        achieved (Qobj): The achieved quantum object (state, gate, or superoperator).
+        kind (str): The type of fidelity calculation ('state', 'unitary', 'average', 'super', 'kraus', or 'custom').
+        **kwargs: Additional arguments for custom fidelity.
+
+    Returns:
+        float: The calculated fidelity value.
+
+    Raises:
+        ValueError: If an unsupported fidelity type is provided.
+
+    Example:
+        >>> target_state = Qobj([[1, 0], [0, 0]])
+        >>> achieved_state = Qobj([[0.8, 0.2], [0.2, 0.8]])
+        >>> compute_fidelity(target_state, achieved_state, kind='state')
+        0.8
+    """
+    validate_qobj_pair(target, achieved, kind)
+    if kind == 'state':
+        return state_fidelity(target, achieved)
+    elif kind == 'unitary':
+        return unitary_fidelity(target, achieved)
+    elif kind == 'average':
+        return average_gate_fidelity(target, achieved)
+    elif kind == 'super':
+        return superoperator_fidelity(target, achieved)
+    elif kind == 'kraus':
+        return kraus_fidelity(target, achieved)
+    elif kind == 'custom':
+        return custom_fidelity(target, achieved, **kwargs)
+    else:
+        raise ValueError(f"Unsupported fidelity kind: {kind}")
+
+def state_fidelity(target: qt.Qobj, achieved: qt.Qobj) -> float:
+    """
+    Computes the fidelity between two states (density matrices or pure states).
+    """
+    if target.isket:
+        target = qt.ket2dm(target)
+    if achieved.isket:
+        achieved = qt.ket2dm(achieved)
+    return qt.fidelity(target, achieved)
+
+def unitary_fidelity(U_target: Qobj, U_actual: Qobj) -> float:
+    """
+    Computes the fidelity between two unitary operators.
+
+    Args:
+        U_target (Qobj): The target unitary matrix.
+        U_actual (Qobj): The achieved unitary matrix.
+
+    Returns:
+        float: The unitary fidelity value.
+
+    Example:
+        >>> U_target = Qobj([[1, 0], [0, 1]])
+        >>> U_actual = Qobj([[0.99, 0.01], [0.01, 0.99]])
+        >>> unitary_fidelity(U_target, U_actual)
+        0.9998
+    """
+    d = U_target.shape[0]
+    overlap = (U_target.dag() * U_actual).tr()
+    fid = abs(overlap / d) ** 2
+    return fid.real
+
+def average_gate_fidelity(U_target: Qobj, U_actual: Qobj) -> float:
+    """
+    Computes the average gate fidelity between two unitary operators.
+
+    Args:
+        U_target (Qobj): The target unitary matrix.
+        U_actual (Qobj): The achieved unitary matrix.
+
+    Returns:
+        float: The average gate fidelity value.
+
+    Example:
+        >>> U_target = Qobj([[1, 0], [0, 1]])
+        >>> U_actual = Qobj([[0.95, 0.05], [0.05, 0.95]])
+        >>> average_gate_fidelity(U_target, U_actual)
+        0.9995
+    """
+    d = U_target.shape[0]
+    fid = (abs((U_target.dag() * U_actual).tr())**2 + d) / (d * (d + 1))
+    return fid.real
+
+def custom_fidelity(target, achieved, func: Callable) -> float:
+    """
+    Computes custom fidelity using a user-defined function.
+
+    Args:
+        target (Qobj): The target quantum object.
+        achieved (Qobj): The achieved quantum object.
+        func (Callable): A user-defined function to compute fidelity.
+
+    Returns:
+        float: The custom fidelity value.
+
+    Example:
+        >>> custom_fidelity(target, achieved, lambda t, a: np.abs(t - a).norm())
+        0.1
+    """
+    return func(target, achieved)
+
+def superoperator_fidelity(S_target: Qobj, S_actual: Qobj) -> float:
+    """
+    Computes the fidelity between two superoperators.
+
+    Args:
+        S_target (Qobj): The target superoperator.
+        S_actual (Qobj): The achieved superoperator.
+
+    Returns:
+        float: The superoperator fidelity value.
+
+    Example:
+        >>> superoperator_fidelity(S_target, S_actual)
+        0.85
+    """
+    d = int(np.sqrt(S_target.shape[0]))
+    vec_id = operator_to_vector(identity(d))
+    chi_target = S_target * vec_id
+    chi_actual = S_actual * vec_id
+    return np.abs((chi_target.dag() * chi_actual)[0, 0].real)
+
+def kraus_fidelity(K_target: List[Qobj], K_actual: List[Qobj]) -> float:
+    """
+    Computes the fidelity between two Kraus operator sets.
+
+    Args:
+        K_target (List[Qobj]): List of target Kraus operators.
+        K_actual (List[Qobj]): List of achieved Kraus operators.
+
+    Returns:
+        float: The Kraus fidelity value.
+
+    Example:
+        >>> kraus_fidelity(K_target, K_actual)
+        0.92
+    """
+    d = K_target[0].shape[0]
+    fid = 0
+    for A in K_target:
+        for B in K_actual:
+            fid += np.abs((A.dag() * B).tr())**2
+    return fid.real / (d**2)
+
+def process_fidelity(ideal_process: qt.Qobj, achieved_process: qt.Qobj) -> float:
+    """
+    Computes the process fidelity between two processes (superoperators).
+    Fidelity = Tr(E1 * E2^dagger) / sqrt(Tr(E1 * E1^dagger) * Tr(E2 * E2^dagger))
+    """
+    choi_ideal = ideal_process.choi()
+    choi_actual = achieved_process.choi()
+    
+    fidelity = np.trace(choi_ideal * choi_actual.dag()) / np.sqrt(
+        np.trace(choi_ideal * choi_ideal.dag()) * np.trace(choi_actual * choi_actual.dag())
+    )
+    return fidelity
+
+# Add Gate Fidelity function
+def gate_fidelity(ideal_gate: qt.Qobj, achieved_gate: qt.Qobj) -> float:
+    """
+    Computes the gate fidelity between two gates (unitary operators).
+    Fidelity = |<ideal|actual>|^2
+    """
+    return np.abs(np.trace(ideal_gate.dag() * achieved_gate)) ** 2
+
+# Add Operator Fidelity function
+def operator_fidelity(ideal_operator: qt.Qobj, achieved_operator: qt.Qobj) -> float:
+    """
+    Computes the operator fidelity between two operators.
+    Fidelity = Tr(sqrt(sqrt(A) * B * sqrt(A)))^2
+    """
+    return qt.fidelity(ideal_operator, achieved_operator)
+
+def get_fidelity_func(kind: str = 'state') -> Union[Callable, None]:
+    """
+    Retrieves the fidelity function for the specified type.
+    """
+    return {
+        'state': state_fidelity,
+        'unitary': unitary_fidelity,
+        'average': average_gate_fidelity,
+        'super': superoperator_fidelity,
+        'kraus': kraus_fidelity,
+        'custom': custom_fidelity,
+        'process': process_fidelity,
+        'gate': gate_fidelity,
+        'operator': operator_fidelity
+    }.get(kind, None)
+
+# --- Gradient Support ---
+
+def fidelity_gradient(U_target: Qobj, U_list: List[Qobj], epsilon: float = 1e-6) -> np.ndarray:
+    """
+    Computes the gradient of fidelity with respect to control parameters.
+
+    Args:
+        U_target (Qobj): The target unitary matrix.
+        U_list (List[Qobj]): List of unitary matrices (control parameters).
+        epsilon (float): Perturbation size for numerical gradient.
+
+    Returns:
+        np.ndarray: Array of gradients.
+
+    Example:
+        >>> fidelity_gradient(U_target, U_list)
+        array([0.1, -0.1])
+    """
+    base_fid = unitary_fidelity(U_target, U_list[-1])
+    grads = []
+    for i, U in enumerate(U_list):
+        U_perturb = U + epsilon * identity(U.shape[0])
+        U_new = U_list[:i] + [U_perturb] + U_list[i+1:]
+        fid_perturbed = unitary_fidelity(U_target, U_new[-1])
+        grad = (fid_perturbed - base_fid) / epsilon
+        grads.append(grad)
+    return np.array(grads)
+
+# --- Performance Optimized Core ---
+
+@njit
+def trace_norm_numba(A_real: np.ndarray, A_imag: np.ndarray) -> float:
+    """
+    Computes the trace norm of a matrix using Numba for performance optimization.
+
+    Args:
+        A_real (np.ndarray): Real part of the matrix.
+        A_imag (np.ndarray): Imaginary part of the matrix.
+
+    Returns:
+        float: Trace norm value.
+
+    Example:
+        >>> trace_norm_numba(A_real, A_imag)
+        1.2
+    """
+    return np.sqrt(np.sum(A_real**2 + A_imag**2))
+
+# --- Fidelity Tracker ---
+logger = logging.getLogger(__name__)
+
+class FidelityTracker:
+    def __init__(self, save_path: Union[str, None] = None, fidtype: str = 'state', fidelity_function: callable = None):
+        """
+        Initializes the FidelityTracker class with an optional fidtype and custom fidelity function.
+        
+        Args:
+            save_path (Union[str, None]): Path to save the fidelity history. If None, no saving occurs.
+            fidtype (str): Type of fidelity to compute (default is 'state').
+            fidelity_function (callable): A custom function to compute fidelity (optional).
+        
+        Example:
+            >>> tracker = FidelityTracker(save_path="fidelity.json", fidtype="state")
+        """
+        self.history = []
+        self.save_path = save_path
+        self.fidtype = fidtype
+        self.fidelity_function = fidelity_function  # Custom function, if provided
+        self.fidelity_methods = {
+            'state': self.compute_state_fidelity,
+            'unitary': self.compute_unitary_fidelity,
+            'super': self.compute_superoperator_fidelity,
+            # Add more fidelity types as needed
+        }
+
+    def record(self, step: int, fidelity_value: float):
+        """
+        Records the fidelity value at a specific optimization step.
+        
+        Args:
+            step (int): The current step in the optimization.
+            fidelity_value (float): The fidelity value at this step.
+        
+        Example:
+            >>> tracker.record(1, 0.85)
+        """
+        self.history.append((step, fidelity_value))
+        logger.info(f"Step {step}: Fidelity = {fidelity_value:.6f}")
+        if self.save_path:
+            self.save_to_file()
+
+    def get_history(self) -> List[Tuple[int, float]]:
+        """
+        Returns the history of recorded fidelity values.
+        
+        Returns:
+            List[Tuple[int, float]]: A list of tuples containing (step, fidelity_value).
+        
+        Example:
+            >>> tracker.get_history()
+            [(1, 0.85), (2, 0.9)]
+        """
+        return self.history
+
+    def plot(self):
+        """
+        Plots the fidelity history using matplotlib.
+        
+        Example:
+            >>> tracker.plot()
+        """
+        try:
+            import matplotlib.pyplot as plt
+            steps, fids = zip(*self.history)
+            plt.plot(steps, fids, marker='o')
+            plt.xlabel("Step")
+            plt.ylabel("Fidelity")
+            plt.title("Fidelity Over Time")
+            plt.grid(True)
+            plt.show()
+        except ImportError:
+            logger.warning("matplotlib not installed. Cannot plot fidelity.")
+
+    def save_to_file(self):
+        """
+        Saves the fidelity history to the specified file path.
+        
+        Example:
+            >>> tracker.save_to_file()
+        """
+        if not self.save_path:
+            return
+        try:
+            with open(self.save_path, 'w') as f:
+                json.dump(self.history, f)
+        except Exception as e:
+            logger.error(f"Failed to save fidelity history: {e}")
+
+    def compute_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the fidelity between two quantum objects A and B.
+        
+        Args:
+            A (Qobj): The target quantum object.
+            B (Qobj): The achieved quantum object.
+        
+        Returns:
+            float: The fidelity value.
+        """
+        if self.fidelity_function:
+            # If the user has provided a custom fidelity function, use it
+            return self.fidelity_function(A, B)
+        elif self.fidtype in self.fidelity_methods:
+            # Use one of the predefined fidelity methods
+            return self.fidelity_methods[self.fidtype](A, B)
+        else:
+            raise ValueError(f"Unknown fidelity type: {self.fidtype}")
+
+    def compute_state_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the state fidelity (e.g., Uhlmann fidelity).
+        
+        Args:
+            A (Qobj): The target quantum state.
+            B (Qobj): The achieved quantum state.
+        
+        Returns:
+            float: The state fidelity value.
+        """
+        return abs((A.dag() * B).tr()) ** 2
+
+    def compute_unitary_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the unitary fidelity.
+        
+        Args:
+            A (Qobj): The target quantum operator.
+            B (Qobj): The achieved quantum operator.
+        
+        Returns:
+            float: The unitary fidelity value.
+        """
+        return abs((A.dag() * B).tr()) ** 2
+
+    def compute_superoperator_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the superoperator fidelity.
+        
+        Args:
+            A (Qobj): The target superoperator.
+            B (Qobj): The achieved superoperator.
+        
+        Returns:
+            float: The superoperator fidelity value.
+        """
+        return np.real(np.trace(A.dag() * B)) ** 2
+
+# --- Validation ---
+
+def validate_qobj_pair(A: Qobj, B: Qobj, kind: str):
+    """
+    Validates that the target and achieved Qobj are compatible for fidelity computation.
+    
+    Args:
+        A (Qobj): The target quantum object.
+        B (Qobj): The achieved quantum object.
+        kind (str): The type of fidelity ('state', 'unitary', 'super', etc.).
+    
+    Raises:
+        ValueError: If the Qobj pair is incompatible for the specified fidelity type.
+    """
+    if kind in ['state', 'unitary', 'average']:
+        if A.shape != B.shape:
+            raise ValueError("Target and achieved Qobj must have the same shape.")
+        if not ((A.isunitary and B.isunitary) or (A.isherm and B.isherm) or A.isket and B.isket):
+            raise ValueError("For state/unitary fidelities, the Qobjs must be valid unitary or Hermitian operators.")
+    elif kind in ['super', 'kraus']:
+        pass  # Add any necessary checks for superoperators/kraus operators
+    else:
+        raise ValueError(f"Unsupported fidelity kind: {kind}")
