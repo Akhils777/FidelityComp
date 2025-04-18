@@ -312,6 +312,21 @@ class FidelityTracker:
             # Add more fidelity types as needed
         }
 
+        def compute_psu_gradient(self, target: Qobj, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+            return self.fidelity_computer_psu.gradient(target, state, control_params)
+
+    def compute_symplectic_gradient(self, target: Qobj, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+        return self.fidelity_computer_symplectic.gradient(target, state, control_params)
+
+    def compute_process_fidelity(self, A: Qobj, B: Qobj) -> float:
+        return process_fidelity(A, B)
+    
+    def compute_psu_fidelity(self, A: Qobj, B: Qobj) -> float:
+        return abs((A.dag() * B).tr()) ** 2  # PSU fidelity calculation (example)
+
+    def compute_symplectic_fidelity(self, A: Qobj, B: Qobj) -> float:
+        return np.abs((A.dag() * B).tr()) ** 2  # Symplectic fidelity calculation (example)
+
     def record(self, step: int, fidelity_value: float):
         """
         Records the fidelity value at a specific optimization step.
@@ -456,6 +471,33 @@ class FidelityTracker:
             float: The process fidelity value.
         """
         return process_fidelity(A, B)
+    
+    
+    def compute_psu_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute PSU (Pure State Unitary) fidelity.
+        
+        Args:
+            A (Qobj): The target quantum state.
+            B (Qobj): The achieved quantum state.
+        
+        Returns:
+            float: The PSU fidelity value between the two states.
+        """
+        return abs((A.dag() * B).tr()) ** 2  # PSU fidelity calculation (example)
+
+    def compute_symplectic_fidelity(self, A: Qobj, B: Qobj) -> float:
+        """
+        Compute the symplectic fidelity.
+        
+        Args:
+            A (Qobj): The target quantum state.
+            B (Qobj): The achieved quantum state.
+        
+        Returns:
+            float: The symplectic fidelity value between the two states.
+        """
+        return np.abs((A.dag() * B).tr()) ** 2  # Symplectic fidelity calculation (example)
 
     def compute_multiple_fidelities(self, states1: List[Qobj], states2: List[Qobj]) -> List[float]:
         """
@@ -501,3 +543,104 @@ def validate_qobj_pair(A: Qobj, B: Qobj, fidtype: str):
         pass
     else:
         raise ValueError(f"Unsupported fidelity type: {fidtype}")
+
+class FidelityComputerPSU:
+    def fidelity(self, target: Qobj, state: Qobj) -> float:
+        """
+        Compute PSU (Pure State Unitary) fidelity.
+        
+        Args:
+            target (Qobj): The target quantum state.
+            state (Qobj): The quantum state to compare to the target.
+        
+        Returns:
+            float: The PSU fidelity value between the two states.
+        """
+        return (state.overlap(target)) ** 2  # Example PSU fidelity calculation
+
+    def gradient(self, target: Qobj, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+        """
+        Compute the gradient of the PSU fidelity with respect to the control parameters.
+        
+        Args:
+            target (Qobj): The target quantum state.
+            state (Qobj): The quantum state to compare to the target.
+            control_params (np.ndarray): The control parameters for optimization.
+        
+        Returns:
+            np.ndarray: The gradient of the fidelity with respect to control parameters.
+        """
+        # Compute the overlap between the target and the state
+        overlap = state.overlap(target)
+
+        # Compute the derivative of the fidelity (fidelity is the square of overlap)
+        # Gradients will be the derivative of the squared overlap with respect to control parameters
+        fidelity_gradient = 2 * np.real(overlap) * self._compute_state_gradient(state, control_params)
+        
+        return fidelity_gradient
+
+    def _compute_state_gradient(self, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+        """
+        Compute the gradient of the quantum state with respect to the control parameters.
+        
+        Args:
+            state (Qobj): The quantum state.
+            control_params (np.ndarray): The control parameters for optimization.
+        
+        Returns:
+            np.ndarray: The gradient of the quantum state with respect to the control parameters.
+        """
+        # This is a placeholder for actual state gradient computation.
+        # Depending on how the state is parameterized (e.g., as a function of time or other parameters),
+        # this method will compute the gradient of the state with respect to the control parameters.
+        return np.gradient(state.full())  # Example, modify as necessary.
+
+class FidelityComputerSymplectic:
+    def fidelity(self, target: Qobj, state: Qobj) -> float:
+        """
+        Compute symplectic fidelity.
+        
+        Args:
+            target (Qobj): The target quantum state.
+            state (Qobj): The quantum state to compare to the target.
+        
+        Returns:
+            float: The symplectic fidelity value between the two states.
+        """
+        return np.abs((target.dag() * state).tr()) ** 2  # Symplectic fidelity calculation
+
+    def gradient(self, target: Qobj, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+        """
+        Compute the gradient of the symplectic fidelity with respect to the control parameters.
+        
+        Args:
+            target (Qobj): The target quantum state.
+            state (Qobj): The quantum state to compare to the target.
+            control_params (np.ndarray): The control parameters for optimization.
+        
+        Returns:
+            np.ndarray: The gradient of the fidelity with respect to control parameters.
+        """
+        # Compute the overlap between the target and the state (symplectic)
+        overlap = np.abs((target.dag() * state).tr())
+
+        # Compute the derivative of the fidelity (fidelity is the square of the absolute overlap)
+        fidelity_gradient = 2 * np.real(overlap) * self._compute_state_gradient(state, control_params)
+        
+        return fidelity_gradient
+
+    def _compute_state_gradient(self, state: Qobj, control_params: np.ndarray) -> np.ndarray:
+        """
+        Compute the gradient of the quantum state with respect to the control parameters.
+        
+        Args:
+            state (Qobj): The quantum state.
+            control_params (np.ndarray): The control parameters for optimization.
+        
+        Returns:
+            np.ndarray: The gradient of the quantum state with respect to the control parameters.
+        """
+        # This is a placeholder for actual state gradient computation.
+        # Depending on how the state is parameterized (e.g., as a function of time or other parameters),
+        # this method will compute the gradient of the state with respect to the control parameters.
+        return np.gradient(state.full())  # Example, modify as necessary.
